@@ -18,7 +18,7 @@ Module FinanceProjections
     Dim SCPrinPor, SCIntPor, PLPrincipal, PLInterest, PLIntPenalty, PLBadDebtRec, IMRemPrin, IMRemInt As Decimal
     Dim IMRefiDate, SCStart_Date, SCEnd_Date, TransDate As Date
 
-    Function main() As Integer
+    Function Main() As Integer
 
         WriteToEventLog("I", "Start")
 
@@ -237,8 +237,9 @@ Module FinanceProjections
             conn.Open()
 
             'Drop & recreate tables
-            cmd = New SqlCommand("sp_FinanceProjections_Reset", conn)
-            cmd.CommandType = CommandType.StoredProcedure
+            cmd = New SqlCommand("sp_FinanceProjections_Reset", conn) With {
+                .CommandType = CommandType.StoredProcedure
+            }
             cmd.ExecuteNonQuery()
             conn.Close()
             Return 0
