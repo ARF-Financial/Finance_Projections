@@ -9,6 +9,7 @@ Module FinanceProjections
     ' Prepare data for Tableau Finance Dashboard showing original projected loan cashflow stream vs. actual collections
     '
     ' ASR 11/3/2016 - store records in tblFinanceProjections_Static
+    ' ASR 05/13/2020 - write zero projections for prepayment weeks
     '================================================================================================================
 
     Private Connect_String As String = Configuration.ConfigurationManager.ConnectionStrings("Connect_String").ConnectionString
@@ -16,7 +17,7 @@ Module FinanceProjections
     Dim rc, IMLoanNbr As Integer
     Dim IMRefi As Boolean
     Dim SCPrinPor, SCIntPor, PLPrincipal, PLInterest, PLIntPenalty, PLBadDebtRec, IMRemPrin, IMRemInt As Decimal
-    Dim IMRefiDate, SCStart_Date, SCEnd_Date, TransDate As Date
+    Dim IMRefiDate, SCStart_Date, SCEnd_Date, TransDate, PrePaidStartDate As Date
 
     Function Main() As Integer
 
@@ -39,8 +40,9 @@ Module FinanceProjections
             Dim IMconn As New SqlConnection(Connect_String)
             IMconn.Open()
 
-            Dim IMLoanSQL As String = "SELECT loannbr, refinancedate, trialbal_remainPrin, trialbal_remainInt " &
-                          "FROM tblInfomineAllLoans where loannbr > 10000 and loannbr < 90000 and loanfundingdate >= '01/01/2013'"
+            Dim IMLoanSQL As String = "SELECT im.loannbr, im.refinancedate, im.trialbal_remainPrin, im.trialbal_remainInt, coalesce(ln.ACHStartDateAfterPrePaid,'19000101') as PrePaidStartDate " &
+                          "FROM tblInfomineAllLoans IM inner join tblloans LN on im.loannbr = ln.loannumber " &
+                          "where im.loannbr > 10000 And im.loannbr < 90000 And im.loanfundingdate >= '01/01/2013'"
             Dim IMLoanDA As New SqlDataAdapter(IMLoanSQL, IMconn)
             Dim IMLoanDS As New DataSet
             IMLoanDA.Fill(IMLoanDS, "IMLoans")
@@ -69,6 +71,7 @@ Module FinanceProjections
                 Else
                     IMRemInt = IMLoan.Item("trialbal_remainInt")
                 End If
+                PrePaidStartDate = IMLoan.Item("PrePaidStartDate")
 
                 'Process the projected payment schedule for the loan
                 rc = Process_ARFSchedule()
@@ -136,7 +139,8 @@ Module FinanceProjections
 
                 ' write an output record for each payment date in the 1140 date range. 
                 Do While Pmt_Date <= SCEnd_Date
-                    If Pmt_Date > Today() Then
+
+                    If Pmt_Date > Today() And Pmt_Date >= PrePaidStartDate Then
                         If WK_RemPrin - SCPrinPor >= 0 Then
                             WK_RemPrin -= SCPrinPor
                         Else
@@ -148,17 +152,27 @@ Module FinanceProjections
                             WK_RemInt = 0
                         End If
                     End If
+
                     ' set flag for projected payments post refi date because Finance Dashboard does not count them
                     If IMRefi And Pmt_Date > IMRefiDate Then
                         PostRefi = 1
                     Else
                         PostRefi = 0
                     End If
+
+                    Dim prin As Decimal = 0
+                    Dim int As Decimal = 0
+                    If Pmt_Date >= PrePaidStartDate Then
+                        prin = SCPrinPor
+                        int = SCIntPor
+                    End If
+
                     ' insert into Finance Projections Table
                     Dim PSSQL As String = "INSERT INTO tblFinanceProjections (LoanNbr, TransType, TransDate, ProjPrincipal, ProjInterest, ProjRemPrin, ProjRemInt, PostRefi) VALUES (" &
-                                             IMLoanNbr & ",'PROJ','" & Pmt_Date & "'," & SCPrinPor & "," & SCIntPor & "," & WK_RemPrin & "," & WK_RemInt & "," & PostRefi & ")"
+                                                 IMLoanNbr & ",'PROJ','" & Pmt_Date & "'," & prin & "," & int & "," & WK_RemPrin & "," & WK_RemInt & "," & PostRefi & ")"
                     Dim PSCmd As New SqlCommand(PSSQL, Scconn)
                     PSCmd.ExecuteNonQuery()
+
                     Pmt_Date = Pmt_Date.AddDays(7)
                 Loop
             Next
@@ -185,11 +199,6 @@ Module FinanceProjections
                     "Select fp.loannbr, transtype, transdate, InterestAmt, principalamt, IntPenaltyAmt, BadDebtRecAmt " &
                     "From tblSalesRepPandL pl inner Join (Select distinct loannbr from tblFinanceProjections) fp On pl.loanid = fp.LoanNbr " &
                     "where transtype in ('ACH','ACH CREDIT','ACH RETURN','MANUAL ADJ') and not transdate is null"
-
-            'PLSql = "insert into tblFinanceProjections (LoanNbr, TransType, TransDate, ActInterest, ActPrincipal, ActIntPenalty, ActBadDebtRec) " &
-            '         "select im.loannbr, transtype, transdate, InterestAmt, principalamt, IntPenaltyAmt, BadDebtRecAmt " &
-            '         "from tblinfomineallloans im inner join tblSalesRepPandL PL on im.LoanNbr = PL.LoanID " &
-            '         "where transtype in ('ACH','ACH CREDIT','ACH RETURN','MANUAL ADJ') and not transdate is null and PL.LoanID = " & IMLoanNbr
 
             Dim PLCmd As New SqlCommand(PLSql, PLconn)
             PLCmd.ExecuteNonQuery()
